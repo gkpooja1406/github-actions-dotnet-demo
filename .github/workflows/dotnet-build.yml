@@ -8,6 +8,7 @@ on:
     paths:
       - 'Program.cs'
       - 'dotnet-demo.csproj'
+      - 'dotnet-demo.Tests/**'
       - '.github/workflows/dotnet-build.yml'
 
   pull_request:
@@ -17,6 +18,7 @@ on:
     paths:
       - 'Program.cs'
       - 'dotnet-demo.csproj'
+      - 'dotnet-demo.Tests/**'
       - '.github/workflows/dotnet-build.yml'
 
   workflow_dispatch:
@@ -39,6 +41,12 @@ jobs:
           whoami
           pwd
 
+      - name: Set .NET install directory
+        run: |
+          mkdir -p "$HOME/.dotnet"
+          echo "DOTNET_INSTALL_DIR=$HOME/.dotnet" >> "$GITHUB_ENV"
+          echo "$HOME/.dotnet" >> "$GITHUB_PATH"
+
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
@@ -46,11 +54,21 @@ jobs:
 
       - name: Verify .NET
         run: |
+          which dotnet
           dotnet --version
           dotnet --info
+          dotnet --list-sdks
 
-      - name: Restore dependencies
+      - name: Restore application dependencies
         run: dotnet restore dotnet-demo.csproj
+
+      - name: Restore test dependencies
+        run: dotnet restore dotnet-demo.Tests/dotnet-demo.Tests.csproj
+
+      - name: Run lint check
+        run: |
+          dotnet format dotnet-demo.csproj --verify-no-changes
+          dotnet format dotnet-demo.Tests/dotnet-demo.Tests.csproj --verify-no-changes
 
       - name: Build application
         run: |
@@ -58,9 +76,48 @@ jobs:
             --configuration Release \
             --no-restore
 
+      - name: Build test project
+        run: |
+          dotnet build dotnet-demo.Tests/dotnet-demo.Tests.csproj \
+            --configuration Release \
+            --no-restore
+
+      - name: Run unit tests
+        run: |
+          mkdir -p TestResults
+
+          dotnet test dotnet-demo.Tests/dotnet-demo.Tests.csproj \
+            --configuration Release \
+            --no-build \
+            --logger "trx;LogFileName=unit-tests.trx" \
+            --results-directory TestResults
+
       - name: Run application
         run: |
           dotnet run \
             --project dotnet-demo.csproj \
             --configuration Release \
             --no-build
+
+      - name: Display results in workflow summary
+        if: always()
+        run: |
+          echo "## .NET Workflow Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "✅ Lint passed" >> "$GITHUB_STEP_SUMMARY"
+            echo "✅ Unit tests passed" >> "$GITHUB_STEP_SUMMARY"
+            echo "✅ Application build passed" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "❌ One or more workflow steps failed" >> "$GITHUB_STEP_SUMMARY"
+            echo "Check the failed step logs for details." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload unit-test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: TestResults/
+          if-no-files-found: warn
